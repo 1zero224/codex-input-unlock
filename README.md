@@ -125,4 +125,4 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File '.\tests\smoke.ps1' -SkipPackageCh
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[MIT](LICENSE)
