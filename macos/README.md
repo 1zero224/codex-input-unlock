@@ -2,6 +2,17 @@
 
 macOS 入口目前为实验性支持，复用项目现有的 Node.js CDP 监督进程和配额门禁逻辑。需要安装 Node.js 22 或更高版本。
 
+## 测试环境
+
+本版本已在以下环境完成验证（2026-10-11）：
+
+- **电脑**：Mac mini（`Mac18,5`），Apple M6，12 核，16 GB 内存
+- **系统**：macOS 27.0.1（Build `26A434`，Apple Silicon / `arm64`）
+- **客户端**：ChatGPT Desktop `26.1007.21159`，路径为 `/Applications/ChatGPT.app`
+- **运行时**：Node.js `v24.21.0`
+- **静态检查**：`bash tests/macos-smoke.sh` 通过
+- **运行检查**：完成实际 renderer bundle 定位、临时 HOME 安装/诊断/卸载，以及 CDP 冷启动和 `verify` 状态检查
+
 ## 双击启动
 
 在 Finder 中双击 `macos/双击启动 Codex.command`。首次运行会自动安装启动文件，然后启动 Codex；之后双击会直接启动。若应用已经通过本入口运行，脚本会验证后提示“已就绪”；若应用是从普通图标启动的，请先完全退出再双击。启动失败时终端窗口会保留错误信息。
