@@ -191,12 +191,22 @@ function Quote-WindowsArgument([string]$Value) {
   return '"' + ([regex]::Replace($Value, '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
 }
 
+function Resolve-PwshExecutable {
+  # Store/MSIX 版 pwsh 装在带版本号的 WindowsApps 目录 (Microsoft.PowerShell_7.6.1.0_x64__8wekyb3d8bbwe)，
+  # 包一升级该路径就失效，写进快捷方式等于埋雷；因此只接受 MSI 的稳定安装位置。
+  $msi = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+  if (Test-Path -LiteralPath $msi -PathType Leaf) { return $msi }
+  $command = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($command -and $command.Source -and $command.Source -notlike '*\WindowsApps\*') { return $command.Source }
+  throw 'No stable PowerShell 7 found. Install PowerShell 7 from the MSI package, then re-run Install.'
+}
+
 function New-Shortcut([string]$ControllerPath) {
   $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   $shortcutPath = Join-Path $startMenu 'Codex Input Unlock.lnk'
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($shortcutPath)
-  $shortcut.TargetPath = (Get-Command pwsh -ErrorAction Stop).Source
+  $shortcut.TargetPath = Resolve-PwshExecutable
   $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ControllerPath`" -Action Launch -PauseOnError"
   $shortcut.WorkingDirectory = Split-Path -Parent $ControllerPath
   $shortcut.Description = 'Launch official Codex with input unlocked for third-party providers'
@@ -207,6 +217,7 @@ function New-Shortcut([string]$ControllerPath) {
 function Invoke-Diagnose {
   $package = Resolve-CodexPackage
   $node = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
+  $pwsh = try { Resolve-PwshExecutable } catch { $null }
   $activatorReady = $false
   try { Ensure-ActivationType; $activatorReady = $true } catch { $activatorReady = $false }
   $state = Read-JsonFile $script:StatePath
@@ -216,6 +227,8 @@ function Invoke-Diagnose {
     Package = $package
     RunningPackageProcesses = @(Get-CodexPackageProcesses $package)
     Node = if ($node) { $node.Source } else { $null }
+    Pwsh = if ($pwsh) { $pwsh } else { $null }
+    PwshUsable = $null -ne $pwsh
     ActivatorReady = $activatorReady
     Installed = $installed
     MissingRuntimeFiles = @($requiredRuntime | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
