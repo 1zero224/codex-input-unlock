@@ -191,14 +191,28 @@ function Quote-WindowsArgument([string]$Value) {
   return '"' + ([regex]::Replace($Value, '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
 }
 
+function Test-StablePwshPath {
+  param([string]$Path)
+  # WindowsApps 下的包目录名形如 Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe，带版本号的那一段会随
+  # Store 包升级改名，写进快捷方式等于埋雷；包家族名目录 (Microsoft.PowerShell_8wekyb3d8bbwe) 与应用执行
+  # 别名 (WindowsApps\pwsh.exe) 都不含版本号，可以安全写进快捷方式。
+  if ([string]::IsNullOrEmpty($Path)) { return $false }
+  return $Path -notmatch '\\WindowsApps\\[^\\]+_\d+(?:\.\d+)+_[^\\]*'
+}
+
 function Resolve-PwshExecutable {
-  # Store/MSIX 版 pwsh 装在带版本号的 WindowsApps 目录 (Microsoft.PowerShell_7.6.1.0_x64__8wekyb3d8bbwe)，
-  # 包一升级该路径就失效，写进快捷方式等于埋雷；因此只接受 MSI 的稳定安装位置。
-  $msi = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
-  if (Test-Path -LiteralPath $msi -PathType Leaf) { return $msi }
+  # 顺序即优先级：MSI 固定位置 → Store 包家族名目录 → Store 应用执行别名 → PATH 上的 pwsh（仍须通过稳定性检查）。
+  $candidates = @(
+    (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe')
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\Microsoft.PowerShell_8wekyb3d8bbwe\pwsh.exe')
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe')
+  )
   $command = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($command -and $command.Source -and $command.Source -notlike '*\WindowsApps\*') { return $command.Source }
-  throw 'No stable PowerShell 7 found. Install PowerShell 7 from the MSI package, then re-run Install.'
+  if ($command -and $command.Source) { $candidates += $command.Source }
+  foreach ($candidate in $candidates) {
+    if ((Test-StablePwshPath $candidate) -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $candidate }
+  }
+  throw 'No stable PowerShell 7 found. Install PowerShell 7 from the MSI package or the Microsoft Store, then re-run Install.'
 }
 
 function New-Shortcut([string]$ControllerPath) {

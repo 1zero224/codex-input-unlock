@@ -59,6 +59,12 @@ foreach ($marker in $forbiddenConfigMutationMarkers) {
 if ($controllerText -notmatch 'configManagedByPatch\s*=\s*\$false') {
   throw 'Controller does not declare config.toml as user-managed'
 }
+if ($controllerText -notmatch 'function Test-StablePwshPath') {
+  throw 'Controller does not distinguish version-pinned Store pwsh paths from stable ones'
+}
+if ($controllerText -match "Source\s+-notlike\s+'\*\\WindowsApps") {
+  throw 'Controller rejects every Store pwsh path instead of only the version-pinned ones'
+}
 if ($controllerText -notmatch 'function Get-RunningOpenAIDesktopProcesses') {
   throw 'Controller does not scan all supported Codex and ChatGPT Desktop packages before launch'
 }
