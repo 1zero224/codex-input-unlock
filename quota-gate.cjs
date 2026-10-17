@@ -90,12 +90,19 @@
   }
 
   function locateCodexLocalQuota(source, sourceUrl, atomVariable) {
-    const consumerPattern = new RegExp(
-      `(${identifier})=${identifier}\\(${escapeRegex(atomVariable)}\\)&&(${identifier})===\\\`local\\\``,
-      "g",
-    );
+    const consumerPatterns = [
+      new RegExp(
+        `(${identifier})=${identifier}\\(${escapeRegex(atomVariable)}\\)&&(${identifier})===\\\`local\\\``,
+        "g",
+      ),
+      new RegExp(
+        `(${identifier})=${identifier}\\((${identifier})===\\\`local\\\`&&${escapeRegex(atomVariable)}\\)`,
+        "g",
+      ),
+    ];
+    const consumers = consumerPatterns.flatMap((pattern) => [...source.matchAll(pattern)]);
     const candidates = [];
-    for (const consumer of source.matchAll(consumerPattern)) {
+    for (const consumer of consumers) {
       const quota = consumer[1];
       const window = source.slice(consumer.index, consumer.index + 12000);
       const assignmentPattern = new RegExp(
