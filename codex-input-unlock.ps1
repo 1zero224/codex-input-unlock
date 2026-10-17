@@ -376,7 +376,18 @@ function Invoke-Launch {
       if ($supervisor.HasExited) { throw "Supervisor exited with code $($supervisor.ExitCode). See $stderrPath" }
       Start-Sleep -Milliseconds 250
     }
-    if (-not $runtime -or $runtime.state -ne 'ready') { throw "Codex Input Unlock did not become ready within $StartupTimeoutSeconds seconds." }
+    if (-not $runtime -or $runtime.state -ne 'ready') {
+      $detail = $null
+      if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
+        try { $final = Read-JsonFile $statusPath } catch { $final = $null }
+        if ($final) {
+          if ($final.state -eq 'failed' -and $final.error) { throw "Supervisor failed: $($final.error)" }
+          if ($final.lastError) { $detail = " Last state: $($final.state). Last error: $($final.lastError)" }
+          elseif ($final.state) { $detail = " Last state: $($final.state)." }
+        }
+      }
+      throw "Codex Input Unlock did not become ready within $StartupTimeoutSeconds seconds.$detail"
+    }
 
     $state = Read-JsonFile $script:StatePath
     if (-not $state) { $state = [pscustomobject]@{} }
@@ -420,7 +431,14 @@ function Invoke-Verify {
   }
   $runtimeFresh = $false
   if ($runtime -and $runtime.updatedAt) {
-    try { $runtimeFresh = ((Get-Date).ToUniversalTime() - [datetime]::Parse([string]$runtime.updatedAt).ToUniversalTime()).TotalSeconds -lt 10 } catch { $runtimeFresh = $false }
+    try {
+      $updatedAt = if ($runtime.updatedAt -is [datetime]) {
+        $runtime.updatedAt.ToUniversalTime()
+      } else {
+        [datetime]::Parse([string]$runtime.updatedAt).ToUniversalTime()
+      }
+      $runtimeFresh = ((Get-Date).ToUniversalTime() - $updatedAt).TotalSeconds -lt 10
+    } catch { $runtimeFresh = $false }
   }
   $runtimeReady = $runtime -and $runtime.state -eq 'ready' -and $runtimeFresh -and $supervisorAlive -and $cdpListening -and $cdpResponding
   [pscustomobject]@{

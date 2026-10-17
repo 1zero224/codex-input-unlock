@@ -122,6 +122,45 @@
     );
   }
 
+  function locateLocalSubmit(source, sourceUrl, atomVariable) {
+    const consumerPattern = new RegExp(
+      `(${identifier})=${identifier}\\((?:[^()]{0,200}?&&\\s*)?${escapeRegex(atomVariable)}\\)`,
+      "g",
+    );
+    const candidates = [];
+    for (const consumer of source.matchAll(consumerPattern)) {
+      const quotaVariable = consumer[1];
+      const tail = source.slice(consumer.index, consumer.index + 20000);
+      const blockPattern = new RegExp(
+        `(${identifier})=[^;]{0,8000}?\\|\\|${escapeRegex(quotaVariable)}(?=[,;)|])`,
+        "g",
+      );
+      for (const block of tail.matchAll(blockPattern)) {
+        const blockVariable = block[1];
+        const absoluteStart = consumer.index + block.index;
+        const window = source.slice(absoluteStart, absoluteStart + 12000);
+        if (!window.includes(`submitDisabled:${blockVariable}`)) continue;
+        const equals = source.indexOf("=", absoluteStart);
+        if (equals < 0) continue;
+        let start = equals + 1;
+        while (start < source.length && /\s/.test(source[start])) start += 1;
+        candidates.push({ quotaVariable, start });
+      }
+    }
+    if (candidates.length !== 1) return null;
+    const candidate = candidates[0];
+    return sourceLocation(
+      source,
+      sourceUrl,
+      candidate.start,
+      candidate.quotaVariable,
+      null,
+      "local-submit-quota",
+      null,
+      candidate.start + 1,
+    );
+  }
+
   function locate(source, sourceUrl) {
     if (typeof source !== "string" || source.length === 0) return null;
     if (typeof sourceUrl !== "string" || sourceUrl.length === 0) return null;
@@ -134,14 +173,15 @@
     if (atoms.length !== 1) return null;
     return locateCodexLocalQuota(source, sourceUrl, atoms[0][1])
       || locateLegacy(source, sourceUrl, atoms[0][1])
-      || locateModern(source, sourceUrl, atoms[0][1]);
+      || locateModern(source, sourceUrl, atoms[0][1])
+      || locateLocalSubmit(source, sourceUrl, atoms[0][1]);
   }
 
   function condition(location) {
     const safeIdentifier = /^[A-Za-z_$][\w$]*$/;
     if (!safeIdentifier.test(location?.quotaVariable || "")) return null;
     const quota = location.quotaVariable;
-    if (location.mode === "codex-local-quota" || location.mode === "legacy-local-host") {
+    if (location.mode === "codex-local-quota" || location.mode === "legacy-local-host" || location.mode === "local-submit-quota") {
       return `(${quota}=false,false)`;
     }
     if (location.mode === "third-party-composer-dual") {
