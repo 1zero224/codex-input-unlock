@@ -252,26 +252,44 @@ function isCandidateScriptUrl(value) {
 async function waitForQuotaScript(session, gateApi, timeoutMs = 20000) {
   let removeHandler = null;
   let settled = false;
+  let parsedScripts = 0;
+  let candidateScripts = 0;
+  let lastProbe = null;
   try {
     const scriptPromise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error("quota bundle discovery timed out"));
+        const detail = JSON.stringify({ parsedScripts, candidateScripts, lastProbe });
+        reject(new Error(`quota bundle discovery timed out (${detail})`));
       }, timeoutMs);
       removeHandler = session.on("Debugger.scriptParsed", (params) => {
+        parsedScripts += 1;
         if (settled || !params.scriptId || !isCandidateScriptUrl(params.url)) return;
+        candidateScripts += 1;
         void (async () => {
           try {
             const sourceResult = await session.send("Debugger.getScriptSource", { scriptId: params.scriptId }, 15000);
             const source = sourceResult.scriptSource;
             if (typeof source !== "string" || source.length === 0) return;
-            const location = gateApi.locate(source, params.url);
-            const condition = gateApi.condition(location);
-            if (!location || !condition || settled) return;
+            let breakpoints = [];
+            if (typeof gateApi.locateAll === "function") {
+              breakpoints = gateApi.locateAll(source, params.url).slice(0, 4);
+            } else {
+              const location = gateApi.locate(source, params.url);
+              const condition = gateApi.condition(location);
+              if (location && condition) breakpoints = [{ location, condition }];
+            }
+            if (breakpoints.length === 0) {
+              if (typeof gateApi.explain === "function") {
+                try { lastProbe = { url: params.url, ...gateApi.explain(source, params.url) }; } catch {}
+              }
+              return;
+            }
+            if (settled) return;
             settled = true;
             clearTimeout(timer);
-            resolve({ scriptId: params.scriptId, url: params.url, location, condition });
+            resolve({ scriptId: params.scriptId, url: params.url, breakpoints });
           } catch {}
         })();
       });
@@ -332,30 +350,47 @@ async function resolveBreakpointLocation(session, scriptId, desired) {
 
 async function superviseTarget(target, gateSource, gateApi, port, onReady) {
   const session = new CdpSession(target.webSocketDebuggerUrl);
-  let breakpointId = null;
+  const armedBreakpoints = [];
   let documentScriptId = null;
   let removeReloadHandler = null;
   try {
     await session.connect();
     const script = await waitForQuotaScript(session, gateApi);
-    const breakpoint = { ...script.location, condition: script.condition };
-    const bootstrap = buildBootstrap(breakpoint, script.url);
+    const primary = script.breakpoints[0];
+    const bootstrap = buildBootstrap({ ...primary.location, condition: primary.condition }, script.url);
     documentScriptId = await installScripts(session, `${gateSource}\n${bootstrap}`);
-    const actualLocation = await resolveBreakpointLocation(session, script.scriptId, breakpoint);
-    const armed = await session.send("Debugger.setBreakpoint", {
-      location: actualLocation,
-      condition: breakpoint.condition,
-    });
-    breakpointId = armed.breakpointId;
-    if (!breakpointId || !armed.actualLocation) throw new Error("Debugger.setBreakpoint did not resolve an actual location");
+    for (const candidate of script.breakpoints) {
+      try {
+        const actualLocation = await resolveBreakpointLocation(session, script.scriptId, candidate.location);
+        const armed = await session.send("Debugger.setBreakpoint", {
+          location: actualLocation,
+          condition: candidate.condition,
+        });
+        if (!armed.breakpointId || !armed.actualLocation) continue;
+        armedBreakpoints.push({
+          mode: candidate.location.mode,
+          breakpointId: armed.breakpointId,
+          requestedLocation: {
+            lineNumber: candidate.location.lineNumber,
+            columnNumber: candidate.location.columnNumber,
+          },
+          actualLocation: armed.actualLocation,
+        });
+      } catch (error) {
+        process.stderr.write(`[skip-breakpoint] ${candidate.location.mode}: ${error.message}\n`);
+      }
+    }
+    if (armedBreakpoints.length === 0) throw new Error("Debugger.setBreakpoint did not resolve an actual location");
+    const armedPrimary = armedBreakpoints[0];
     const readyDetails = {
       port,
       targetId: target.id,
       targetUrl: target.url,
       bundleUrl: script.url,
-      breakpointId,
-      requestedLocation: { lineNumber: breakpoint.lineNumber, columnNumber: breakpoint.columnNumber },
-      actualLocation: armed.actualLocation,
+      breakpointId: armedPrimary.breakpointId,
+      requestedLocation: armedPrimary.requestedLocation,
+      actualLocation: armedPrimary.actualLocation,
+      breakpoints: armedBreakpoints,
     };
     status("ready", readyDetails);
     onReady?.();
@@ -365,14 +400,14 @@ async function superviseTarget(target, gateSource, gateApi, port, onReady) {
     while (true) {
       await sleep(2000);
       if (reloadDetected) return;
-      const alive = await session.evaluate("Boolean(globalThis.__codexExternalQuotaGate && (globalThis.__codexInputUnlockState?.breakpoint || globalThis.__codexExternalPatchState?.breakpoint))");
-      if (alive !== true) return;
-      status("ready", readyDetails);
+      const probe = await session.evaluate("(() => ({ alive: Boolean(globalThis.__codexExternalQuotaGate && (globalThis.__codexInputUnlockState?.breakpoint || globalThis.__codexExternalPatchState?.breakpoint)), stats: globalThis.__codexExternalQuotaGate?.stats ?? null }))()");
+      if (probe?.alive !== true) return;
+      status("ready", { ...readyDetails, gateStats: probe.stats });
     }
   } finally {
     removeReloadHandler?.();
-    if (breakpointId) {
-      try { await session.send("Debugger.removeBreakpoint", { breakpointId }, 2000); } catch {}
+    for (const armed of armedBreakpoints) {
+      try { await session.send("Debugger.removeBreakpoint", { breakpointId: armed.breakpointId }, 2000); } catch {}
     }
     if (documentScriptId) {
       try {
@@ -394,8 +429,11 @@ async function selfTest() {
   const sourceUrl = `app://-/assets/${path.basename(bundlePath)}`;
   const location = gate.locate(source, sourceUrl);
   const condition = gate.condition(location);
-  if (!location || !condition) throw new Error("quota gate did not uniquely locate the current bundle");
-  process.stdout.write(`${JSON.stringify({ ok: true, location, condition })}\n`);
+  const explain = typeof gate.explain === "function" ? gate.explain(source, sourceUrl) : null;
+  if (!location || !condition) {
+    throw new Error(`quota gate did not uniquely locate the current bundle: ${JSON.stringify(explain)}`);
+  }
+  process.stdout.write(`${JSON.stringify({ ok: true, location, condition, explain })}\n`);
 }
 
 async function main() {

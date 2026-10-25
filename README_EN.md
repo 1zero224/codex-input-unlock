@@ -132,6 +132,21 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File '.\tests\smoke.ps1' -SkipPackageCh
 
 ---
 
+## Version adaptation
+
+Codex releases re-minify and reshape the renderer bundle, so discovery uses **multiple anchors**:
+
+1. **Semantic anchor:** a breakpoint inside the quota selector's `rate_limit?.allowed` guard treats quota data as available. It does not depend on composer component structure or minified names.
+2. **Structural anchors:** locators for known composer submit-disabled chains (for example `composer-quota-consumer`) rewrite the gating variable to `false`.
+
+At startup the supervisor arms every anchor found in the current bundle (up to four); any hit unlocks the composer. `breakpoints` and `gateStats.unlockCount` in `runtime-status-*.json` show which anchor actually fired. If a Codex update causes a startup timeout, the error carries `lastProbe` (quota atom count, presence of `submitDisabled`, per-locator matches). Run the self-test below before adding a rule:
+
+```powershell
+node .\cdp-supervisor.mjs --self-test --gate .\quota-gate.cjs --bundle <extracted app-primary-*.js>
+```
+
+---
+
 ## Notes
 
 1. **A cold start through the dedicated launcher is required.** The original official shortcut does not provide the CDP arguments.

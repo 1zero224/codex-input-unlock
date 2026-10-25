@@ -115,6 +115,23 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File '.\tests\smoke.ps1' -SkipPackageCh
 
 ---
 
+## 版本适配
+
+Codex 更新会重新压缩并调整前端 bundle 的结构，因此定位逻辑采用**多锚点**策略：
+
+1. **语义锚点**：在配额 selector 内部 `rate_limit?.allowed` 的守卫语句处下断点，直接把配额数据视为可用。它与 composer 的组件结构和压缩变量名无关，只要该判定仍存在即可生效。
+2. **结构锚点**：已知版本的 composer 提交禁用链定位器（如 `composer-quota-consumer`），在提交禁用变量的计算位置将其改写为 `false`。
+
+启动时 supervisor 会同时挂载当前 bundle 中所有命中的锚点（最多 4 个），任一断点命中即可解锁；`runtime-status-*.json` 中的 `breakpoints` 与 `gateStats.unlockCount` 可用于确认实际生效的锚点。升级后若启动超时，错误信息会携带 `lastProbe`（quota atom 数量、`submitDisabled` 是否存在、各定位器命中情况）。补充规则前先运行：
+
+```powershell
+node .\cdp-supervisor.mjs --self-test --gate .\quota-gate.cjs --bundle <解包后的 app-primary-*.js>
+```
+
+该命令会输出当前 bundle 命中的全部锚点与断点条件。
+
+---
+
 ## 注意事项
 
 1. **必须通过专属入口冷启动**：官方原版快捷方式启动的进程不带 CDP 参数。

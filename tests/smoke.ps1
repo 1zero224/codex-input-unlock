@@ -82,16 +82,22 @@ if ($BundlePath) {
   $selfTestText = & node $supervisor --self-test --gate $gate --bundle $BundlePath
   if ($LASTEXITCODE -ne 0) { throw 'Quota gate current-bundle self-test failed' }
   $selfTest = $selfTestText | ConvertFrom-Json
-  if ($selfTest.location.mode -notin @('codex-local-quota', 'local-submit-quota')) { throw 'Current bundle did not use a supported Codex local quota locator' }
+  if ($selfTest.location.mode -notin @('codex-local-quota', 'local-submit-quota', 'composer-quota-consumer', 'quota-atom-data')) { throw 'Current bundle did not use a supported Codex local quota locator' }
   if (-not $selfTest.location.quotaVariable) {
     throw 'Current bundle locator did not identify the local quota variable'
   }
   if ($selfTest.location.mode -eq 'codex-local-quota' -and -not $selfTest.location.hostVariable) {
     throw 'Current bundle locator did not identify the local host variable'
   }
-  if ($selfTest.condition -notmatch '^\([A-Za-z_$][\w$]*=false,false\)$') {
+  if ($selfTest.location.mode -eq 'quota-atom-data') {
+    if ($selfTest.condition -notmatch '^\(__codexExternalQuotaGate\.unlock\([A-Za-z_$][\w$]*\),false\)$') {
+      throw 'Current bundle locator produced an unexpected atom breakpoint condition'
+    }
+  } elseif ($selfTest.condition -notmatch '^\([A-Za-z_$][\w$]*=false,false\)$') {
     throw 'Current bundle locator produced an unexpected breakpoint condition'
   }
+  if ($selfTest.explain.atomCount -ne 1) { throw 'Current bundle does not expose exactly one quota atom' }
+  if ($selfTest.explain.matched -notcontains 'quota-atom-data') { throw 'Current bundle atom-data fallback is not locatable' }
   if ($null -eq $selfTest.location.endLineNumber -or $null -eq $selfTest.location.endColumnNumber) {
     throw 'Current bundle locator did not bound the quota expression'
   }
